@@ -266,7 +266,6 @@ return function()
 	end)
 
 	describe("Promise.all", function()
-		FOCUS()
 		it("should error if given something other than a table", function()
 			expect(function()
 				Promise.all(1)
