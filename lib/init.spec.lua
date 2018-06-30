@@ -264,4 +264,62 @@ return function()
 			expect(#chained._values).to.equal(0)
 		end)
 	end)
+
+	describe("Promise.all", function()
+		FOCUS()
+		it("should error if given something other than a table", function()
+			expect(function()
+				Promise.all(1)
+			end).to.throw()
+		end)
+
+		it("should resolve instantly with an empty table if given no values", function()
+			local promise = Promise.all({})
+			local success, value = promise:await()
+
+			expect(success).to.equal(true)
+			expect(promise:getStatus()).to.equal(Promise.Status.Resolved)
+			expect(value).to.be.a("table")
+			expect(#value).to.equal(0)
+		end)
+
+		it("should let non-promise values pass through unchanged", function()
+			local values = {{}, {}, {}}
+			local promise = Promise.all(values)
+			local success, resolved = promise:await()
+
+			expect(success).to.equal(true)
+			expect(resolved[1]).to.equal(values[1])
+			expect(resolved[2]).to.equal(values[2])
+			expect(resolved[3]).to.equal(values[3])
+		end)
+
+		it("should wait for all promises to be resolved and return their values", function()
+			local promises = {
+				Promise.new(function(resolve)
+					resolve(1)
+				end),
+				Promise.new(function(resolve)
+					resolve("A string")
+				end),
+				Promise.new(function(resolve)
+					resolve(false)
+				end),
+				Promise.new(function(resolve)
+					resolve(nil)
+				end),
+			}
+
+			local promise = Promise.all(promises)
+			local success, resolved = promise:await()
+
+			expect(success).to.equal(true)
+			expect(resolved).to.be.a("table")
+			expect(#resolved).to.equal(3)
+			expect(resolved[1]).to.equal(1)
+			expect(resolved[2]).to.equal("A string")
+			expect(resolved[3]).to.equal(false)
+			expect(resolved[4]).to.equal(nil)
+		end)
+	end)
 end
