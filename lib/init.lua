@@ -179,7 +179,9 @@ function Promise.all(promises)
 			end
 		end
 
-		for i, value in ipairs(promises) do
+		-- Loop over numerically so as to allow holey arrays.
+		for i = 1, #promises do
+			local value = promises[i]
 			-- Pass value through if it's not actually a promise.
 			if Promise.is(value) then
 				value:andThen(function(...)

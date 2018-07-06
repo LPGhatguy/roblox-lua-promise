@@ -302,11 +302,11 @@ return function()
 					resolve("A string")
 				end),
 				Promise.new(function(resolve)
-					resolve(false)
-				end),
-				Promise.new(function(resolve)
 					resolve(nil)
 				end),
+				Promise.new(function(resolve)
+					resolve(false)
+				end)
 			}
 
 			local promise = Promise.all(promises)
@@ -314,11 +314,11 @@ return function()
 
 			expect(success).to.equal(true)
 			expect(resolved).to.be.a("table")
-			expect(#resolved).to.equal(3)
+			expect(#resolved).to.equal(4)
 			expect(resolved[1]).to.equal(1)
 			expect(resolved[2]).to.equal("A string")
-			expect(resolved[3]).to.equal(false)
-			expect(resolved[4]).to.equal(nil)
+			expect(resolved[3]).to.equal(nil)
+			expect(resolved[4]).to.equal(false)
 		end)
 	end)
 end
