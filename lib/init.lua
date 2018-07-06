@@ -151,9 +151,6 @@ function Promise.all(promises)
 		error("Please pass an array of promises or values to Promise.all", 2)
 	end
 
-	-- A traceback for extra arguments warning
-	local source = debug.traceback()
-
 	-- If there are no values then return an already resolved promise.
 	if #promises == 0 then
 		return Promise.resolve({})
@@ -172,16 +169,6 @@ function Promise.all(promises)
 			if rejected == true then
 				-- Bail out if this promise has already been rejected.
 				return
-			end
-
-			if select("#", ...) > 1 then
-				local message = (
-					"When using Promise.all, extra return values are " ..
-					"discarded! See:\n\n%s"
-				):format(
-					source
-				)
-				warn(message)
 			end
 
 			resolvedValues[i] = ...
