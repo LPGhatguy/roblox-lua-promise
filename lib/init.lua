@@ -166,7 +166,7 @@ function Promise.all(promises)
 
 		-- Called when a single value is resolved and resolves if all are done.
 		local function resolveOne(i, ...)
-			if rejected == true then
+			if rejected then
 				-- Bail out if this promise has already been rejected.
 				return
 			end
