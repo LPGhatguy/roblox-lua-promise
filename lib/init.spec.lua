@@ -282,15 +282,10 @@ return function()
 			expect(#value).to.equal(0)
 		end)
 
-		it("should let non-promise values pass through unchanged", function()
-			local values = {{}, {}, {}}
-			local promise = Promise.all(values)
-			local success, resolved = promise:await()
-
-			expect(success).to.equal(true)
-			expect(resolved[1]).to.equal(values[1])
-			expect(resolved[2]).to.equal(values[2])
-			expect(resolved[3]).to.equal(values[3])
+		it("should error if given non-promise values", function()
+			expect(function()
+				Promise.all({{}, {}, {}})
+			end).to.throw()
 		end)
 
 		it("should wait for all promises to be resolved and return their values", function()

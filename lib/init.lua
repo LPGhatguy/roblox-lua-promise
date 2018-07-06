@@ -156,6 +156,14 @@ function Promise.all(promises)
 		return Promise.resolve({})
 	end
 
+	-- We need to check that each value is a promise here so that we can produce a
+	-- proper error rather than a rejected promise with our error.
+	for i = 1, #promises do
+		if not Promise.is(promises[i]) then
+			error(("Non-promise value passed into Promise.all at index #%d"):format(i), 2)
+		end
+	end
+
 	return Promise.new(function(resolve, reject)
 		-- An array to contain our resolved values from the given promises.
 		local resolvedValues = {}
@@ -179,23 +187,17 @@ function Promise.all(promises)
 			end
 		end
 
-		-- Loop over numerically so as to allow holey arrays.
+		-- We can assume the values inside `promises` are all promises since we checked above.
 		for i = 1, #promises do
-			local value = promises[i]
-			-- Pass value through if it's not actually a promise.
-			if Promise.is(value) then
-				value:andThen(function(...)
-					resolveOne(i, ...)
-				end)
-				:catch(function(...)
-					-- Only reject if this promise is unrejected and unresolved.
-					if rejected == false then
-						reject(...)
-					end
-				end)
-			else
-				resolveOne(i, value)
-			end
+			promises[i]:andThen(function(...)
+				resolveOne(i, ...)
+			end)
+			:catch(function(...)
+				-- Only reject if this promise is unrejected.
+				if not rejected then
+					reject(...)
+				end
+			end)
 		end
 	end)
 end
