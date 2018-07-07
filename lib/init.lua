@@ -10,9 +10,7 @@ local PROMISE_DEBUG = false
 	Used to cajole varargs without dropping sparse values.
 ]]
 local function pack(...)
-	local len = select("#", ...)
-
-	return len, { ... }
+	return select("#", ...), { ... }
 end
 
 --[[
@@ -32,8 +30,7 @@ local function wpcallPacked(f, ...)
 	local resultLength, result = pack(xpcall(body, debug.traceback))
 
 	-- If promise debugging is on, warn whenever a pcall fails.
-	-- This is useful for debugging issues within the Promise implementation
-	-- itself.
+	-- This is useful for debugging issues within the Promise implementation itself.
 	if PROMISE_DEBUG and not result[1] then
 		warn(result[2])
 	end
@@ -56,10 +53,6 @@ local function createAdvancer(callback, resolve, reject)
 			reject(unpack(result, 2, resultLength))
 		end
 	end
-end
-
-local function isEmpty(t)
-	return next(t) == nil
 end
 
 local Promise = {}
@@ -116,7 +109,7 @@ function Promise.new(callback)
 		-- If an error occurs with no observers, this will be set.
 		_unhandledRejection = false,
 
-		-- Queues representing functions we should invoke when we update!
+		-- Queues representing functions we should invoke when we update! (arrays of functions)
 		_queuedResolve = {},
 		_queuedReject = {},
 	}
@@ -209,8 +202,8 @@ function Promise:andThen(successHandler, failureHandler)
 
 		if self._status == Promise.Status.Started then
 			-- If we haven't resolved yet, put ourselves into the queue
-			table.insert(self._queuedResolve, successCallback)
-			table.insert(self._queuedReject, failureCallback)
+			self._queuedResolve[#self._queuedResolve + 1] = successCallback
+			self._queuedReject[#self._queuedReject + 1] = failureCallback
 		elseif self._status == Promise.Status.Resolved then
 			-- This promise has already resolved! Trigger success immediately.
 			successCallback(unpack(self._values, 1, self._valuesLength))
@@ -237,17 +230,14 @@ function Promise:await()
 	self._unhandledRejection = false
 
 	if self._status == Promise.Status.Started then
-		local result
-		local resultLength
+		local resultLength, result
 		local bindable = Instance.new("BindableEvent")
 
 		self:andThen(function(...)
-			result = {...}
-			resultLength = select("#", ...)
+			resultLength, result = pack(...)
 			bindable:Fire(true)
 		end, function(...)
-			result = {...}
-			resultLength = select("#", ...)
+			resultLength, result = pack(...)
 			bindable:Fire(false)
 		end)
 
@@ -263,81 +253,71 @@ function Promise:await()
 end
 
 function Promise:_resolve(...)
-	if self._status ~= Promise.Status.Started then
-		return
-	end
+	if self._status == Promise.Status.Started then
+		-- If the resolved value was a Promise, we chain onto it!
+		if Promise.is((...)) then
+			-- Without this warning, arguments sometimes mysteriously disappear
+			if select("#", ...) > 1 then
+				local message = (
+					"When returning a Promise from andThen, extra arguments are " ..
+					"discarded! See:\n\n%s"
+				):format(
+					self._source
+				)
+				warn(message)
+			end
 
-	local argLength = select("#", ...)
+			(...):andThen(function(...)
+				self:_resolve(...)
+			end, function(...)
+				self:_reject(...)
+			end)
+		else
+			self._status = Promise.Status.Resolved
+			self._valuesLength, self._values = pack(...)
 
-	-- If the resolved value was a Promise, we chain onto it!
-	if Promise.is((...)) then
-		-- Without this warning, arguments sometimes mysteriously disappear
-		if argLength > 1 then
-			local message = (
-				"When returning a Promise from andThen, extra arguments are " ..
-				"discarded! See:\n\n%s"
-			):format(
-				self._source
-			)
-			warn(message)
+			-- We assume that these callbacks will not throw errors.
+			for i = 1, #self._queuedResolve do
+				self._queuedResolve[i](...)
+			end
 		end
-
-		(...):andThen(function(...)
-			self:_resolve(...)
-		end, function(...)
-			self:_reject(...)
-		end)
-
-		return
-	end
-
-	self._status = Promise.Status.Resolved
-	self._values = {...}
-	self._valuesLength = argLength
-
-	-- We assume that these callbacks will not throw errors.
-	for _, callback in ipairs(self._queuedResolve) do
-		callback(...)
 	end
 end
 
 function Promise:_reject(...)
-	if self._status ~= Promise.Status.Started then
-		return
-	end
+	if self._status == Promise.Status.Started then
+		self._status = Promise.Status.Rejected
+		self._valuesLength, self._values = pack(...)
 
-	self._status = Promise.Status.Rejected
-	self._values = {...}
-	self._valuesLength = select("#", ...)
+		local numRejectionHandlers = #self._queuedReject
 
-	-- If there are any rejection handlers, call those!
-	if not isEmpty(self._queuedReject) then
-		-- We assume that these callbacks will not throw errors.
-		for _, callback in ipairs(self._queuedReject) do
-			callback(...)
-		end
-	else
-		-- At this point, no one was able to observe the error.
-		-- An error handler might still be attached if the error occurred
-		-- synchronously. We'll wait one tick, and if there are still no
-		-- observers, then we should put a message in the console.
-
-		self._unhandledRejection = true
-		local err = tostring((...))
-
-		spawn(function()
-			-- Someone observed the error, hooray!
-			if not self._unhandledRejection then
-				return
+		-- If there are any rejection handlers, call those!
+		if numRejectionHandlers > 0 then
+			-- We assume that these callbacks will not throw errors.
+			for i = 1, numRejectionHandlers do
+				self._queuedReject[i](...)
 			end
+		else
+			-- At this point, no one was able to observe the error.
+			-- An error handler might still be attached if the error occurred
+			-- synchronously. We'll wait one tick, and if there are still no
+			-- observers, then we should put a message in the console.
 
-			-- Build a reasonable message
-			local message = ("Unhandled promise rejection:\n\n%s\n\n%s"):format(
-				err,
-				self._source
-			)
-			warn(message)
-		end)
+			self._unhandledRejection = true
+			local err = tostring((...))
+
+			spawn(function()
+				-- Nobody observed the error, oh no!
+				if self._unhandledRejection then
+					-- Build a reasonable message
+					local message = ("Unhandled promise rejection:\n\n%s\n\n%s"):format(
+						err,
+						self._source
+					)
+					warn(message)
+				end
+			end)
+		end
 	end
 end
 
