@@ -17,7 +17,7 @@ end
 	wpcallPacked is a version of xpcall that:
 	* Returns the length of the result first
 	* Returns the result packed into a table
-	* Passes extra arguments through to the passed function, which xpcall does not
+	* Passes extra arguments through to passed function, which xpcall doesn't
 	* Issues a warning if PROMISE_DEBUG is enabled
 ]]
 local function wpcallPacked(f, ...)
@@ -30,7 +30,7 @@ local function wpcallPacked(f, ...)
 	local resultLength, result = pack(xpcall(body, debug.traceback))
 
 	-- If promise debugging is on, warn whenever a pcall fails.
-	-- This is useful for debugging issues within the Promise implementation itself.
+	-- This is for debugging issues within the Promise implementation itself.
 	if PROMISE_DEBUG and not result[1] then
 		warn(result[2])
 	end
@@ -56,12 +56,12 @@ local function createAdvancer(callback, resolve, reject)
 end
 
 local Promise = {}
-Promise.__index = Promise
+Promise.__index = {}
 
 Promise.Status = {
-	Started = "Started",
-	Resolved = "Resolved",
-	Rejected = "Rejected",
+	Started = newproxy(false),
+	Resolved = newproxy(false),
+	Rejected = newproxy(false),
 }
 
 --[[
@@ -109,7 +109,7 @@ function Promise.new(callback)
 		-- If an error occurs with no observers, this will be set.
 		_unhandledRejection = false,
 
-		-- Queues representing functions we should invoke when we update! (arrays of functions)
+		-- Lists of functions to invoke when our status updates
 		_queuedResolve = {},
 		_queuedReject = {},
 	}
@@ -173,7 +173,7 @@ function Promise.is(object)
 	return object._type == "Promise"
 end
 
-function Promise:getStatus()
+function Promise.__index:getStatus()
 	return self._status
 end
 
@@ -182,7 +182,7 @@ end
 
 	The given callbacks are invoked depending on that result.
 ]]
-function Promise:andThen(successHandler, failureHandler)
+function Promise.__index:andThen(successHandler, failureHandler)
 	self._unhandledRejection = false
 
 	-- Create a new promise to follow this part of the chain
@@ -190,24 +190,23 @@ function Promise:andThen(successHandler, failureHandler)
 		-- Our default callbacks just pass values onto the next promise.
 		-- This lets success and failure cascade correctly!
 
-		local successCallback = resolve
-		if successHandler then
-			successCallback = createAdvancer(successHandler, resolve, reject)
-		end
+		-- Avoid unnecessary Advancer creation when promises already resolved!
+		local successCallback = self._status ~= Promise.Status.Rejected and
+			(successHandler and createAdvancer(successHandler, resolve, reject) or resolve)
 
-		local failureCallback = reject
-		if failureHandler then
-			failureCallback = createAdvancer(failureHandler, resolve, reject)
-		end
+		local failureCallback = self._status ~= Promise.Status.Resolved and
+			(failureHandler and createAdvancer(failureHandler, resolve, reject) or reject)
 
-		if self._status == Promise.Status.Started then
-			-- If we haven't resolved yet, put ourselves into the queue
-			self._queuedResolve[#self._queuedResolve + 1] = successCallback
-			self._queuedReject[#self._queuedReject + 1] = failureCallback
-		elseif self._status == Promise.Status.Resolved then
-			-- This promise has already resolved! Trigger success immediately.
-			successCallback(unpack(self._values, 1, self._valuesLength))
-		elseif self._status == Promise.Status.Rejected then
+		if successCallback then
+			if failureCallback then
+				-- If we haven't resolved yet, put ourselves into the queue
+				table.insert(self._queuedResolve, successCallback)
+				table.insert(self._queuedReject, failureCallback)
+			else
+				-- This promise already resolved! Trigger success immediately.
+				successCallback(unpack(self._values, 1, self._valuesLength))
+			end
+		else
 			-- This promise died a terrible death! Trigger failure immediately.
 			failureCallback(unpack(self._values, 1, self._valuesLength))
 		end
@@ -217,7 +216,7 @@ end
 --[[
 	Used to catch any errors that may have occurred in the promise.
 ]]
-function Promise:catch(failureCallback)
+function Promise.__index:catch(failureCallback)
 	return self:andThen(nil, failureCallback)
 end
 
@@ -226,7 +225,7 @@ end
 
 	This matches the execution model of normal Roblox functions.
 ]]
-function Promise:await()
+function Promise.__index:await()
 	self._unhandledRejection = false
 
 	if self._status == Promise.Status.Started then
@@ -252,72 +251,72 @@ function Promise:await()
 	end
 end
 
-function Promise:_resolve(...)
-	if self._status == Promise.Status.Started then
-		-- If the resolved value was a Promise, we chain onto it!
-		if Promise.is((...)) then
-			-- Without this warning, arguments sometimes mysteriously disappear
-			if select("#", ...) > 1 then
-				local message = (
-					"When returning a Promise from andThen, extra arguments are " ..
-					"discarded! See:\n\n%s"
-				):format(
-					self._source
-				)
-				warn(message)
-			end
+function Promise.__index:_resolve(...)
+	if self._status ~= Promise.Status.Started then return end
 
-			(...):andThen(function(...)
-				self:_resolve(...)
-			end, function(...)
-				self:_reject(...)
-			end)
-		else
-			self._status = Promise.Status.Resolved
-			self._valuesLength, self._values = pack(...)
+	-- If the resolved value was a Promise, we chain onto it!
+	if Promise.is((...)) then
+		-- Without this warning, arguments sometimes mysteriously disappear
+		if select("#", ...) > 1 then
+			local message = (
+				"When returning a Promise from andThen, extra arguments are " ..
+				"discarded! See:\n\n%s"
+			):format(
+				self._source
+			)
+			warn(message)
+		end
 
-			-- We assume that these callbacks will not throw errors.
-			for i = 1, #self._queuedResolve do
-				self._queuedResolve[i](...)
-			end
+		(...):andThen(function(...)
+			self:_resolve(...)
+		end, function(...)
+			self:_reject(...)
+		end)
+	else
+		self._status = Promise.Status.Resolved
+		self._valuesLength, self._values = pack(...)
+
+		-- We assume that these callbacks will not throw errors.
+		for i = 1, #self._queuedResolve do
+			self._queuedResolve[i](...)
 		end
 	end
 end
 
-function Promise:_reject(...)
-	if self._status == Promise.Status.Started then
-		self._status = Promise.Status.Rejected
-		self._valuesLength, self._values = pack(...)
+function Promise.__index:_reject(...)
+	if self._status ~= Promise.Status.Started then return end
 
-		local numRejectionHandlers = #self._queuedReject
+	self._status = Promise.Status.Rejected
+	self._valuesLength, self._values = pack(...)
 
-		-- If there are any rejection handlers, call those!
-		if numRejectionHandlers > 0 then
-			-- We assume that these callbacks will not throw errors.
-			for i = 1, numRejectionHandlers do
-				self._queuedReject[i](...)
-			end
-		else
-			-- At this point, no one was able to observe the error.
-			-- An error handler might still be attached if the error occurred
-			-- synchronously. We'll wait one tick, and if there are still no
-			-- observers, then we should put a message in the console.
+	local numRejectionHandlers = #self._queuedReject
 
-			self._unhandledRejection = true
-			local err = tostring((...))
-
-			spawn(function()
-				-- Nobody observed the error, oh no!
-				if self._unhandledRejection then
-					-- Build a reasonable message
-					local message = ("Unhandled promise rejection:\n\n%s\n\n%s"):format(
-						err,
-						self._source
-					)
-					warn(message)
-				end
-			end)
+	-- If there are any rejection handlers, call those!
+	if numRejectionHandlers > 0 then
+		-- We assume that these callbacks will not throw errors.
+		for i = 1, numRejectionHandlers do
+			self._queuedReject[i](...)
 		end
+	else
+		-- At this point, no one was able to observe the error.
+		-- An error handler might still be attached if the error occurred
+		-- synchronously. We'll wait one tick, and if there are still no
+		-- observers, then we should put a message in the console.
+
+		self._unhandledRejection = true
+		local err = tostring((...))
+
+		spawn(function()
+			-- Nobody observed the error, oh no!
+			if self._unhandledRejection then
+				-- Build a reasonable message
+				local message = ("Unhandled promise rejection:\n\n%s\n\n%s"):format(
+					err,
+					self._source
+				)
+				warn(message)
+			end
+		end)
 	end
 end
 
