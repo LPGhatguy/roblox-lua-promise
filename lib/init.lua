@@ -62,6 +62,7 @@ local function isEmpty(t)
 	return next(t) == nil
 end
 
+local Promises = setmetatable({}, {__mode = "k"}) -- Weak hash table of all promises
 local Promise = {}
 Promise.__index = Promise
 
@@ -96,13 +97,14 @@ Promise.Status = {
 			end)
 ]]
 function Promise.new(callback)
-	local promise = {
+	local self = setmetatable({
 		-- Used to locate where a promise was created
 		_source = debug.traceback(),
 
 		-- A tag to identify us as a promise
 		_type = "Promise",
 
+		-- The status of the Promise
 		_status = Promise.Status.Started,
 
 		-- A table containing a list of all results, whether success or failure.
@@ -119,27 +121,26 @@ function Promise.new(callback)
 		-- Queues representing functions we should invoke when we update!
 		_queuedResolve = {},
 		_queuedReject = {},
-	}
-
-	setmetatable(promise, Promise)
+	}, Promise)
 
 	local function resolve(...)
-		promise:_resolve(...)
+		self:_resolve(...)
 	end
 
 	local function reject(...)
-		promise:_reject(...)
+		self:_reject(...)
 	end
 
 	local _, result = wpcallPacked(callback, resolve, reject)
 	local ok = result[1]
 	local err = result[2]
 
-	if not ok and promise._status == Promise.Status.Started then
+	if not ok and self._status == Promise.Status.Started then
 		reject(err)
 	end
 
-	return promise
+	Promises[self] = true
+	return self
 end
 
 --[[
@@ -226,11 +227,7 @@ end
 	Is the given object a Promise instance?
 ]]
 function Promise.is(object)
-	if type(object) ~= "table" then
-		return false
-	end
-
-	return object._type == "Promise"
+	return Promises[object] or false
 end
 
 function Promise:getStatus()
