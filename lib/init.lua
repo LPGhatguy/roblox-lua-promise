@@ -5,40 +5,29 @@
 local PROMISE_DEBUG = false
 
 --[[
-	Packs a number of arguments into a table and returns its length.
-
-	Used to cajole varargs without dropping sparse values.
+	pcallWithTraceback is a wrapper around xpcall that:
+	- Uses debug.traceback as the traceback function
+	- Warns on failure if PROMISE_DEBUG is set
+	- Passeses through to the function like pcall
 ]]
-local function pack(...)
-	local len = select("#", ...)
-
-	return len, { ... }
-end
-
---[[
-	wpcallPacked is a version of xpcall that:
-	* Returns the length of the result first
-	* Returns the result packed into a table
-	* Passes extra arguments through to the passed function; xpcall doesn't
-	* Issues a warning if PROMISE_DEBUG is enabled
-]]
-local function wpcallPacked(f, ...)
-	local argsLength, args = pack(...)
+local function pcallWithTraceback(f, ...)
+	local args = {...}
+	local argsLength = select("#", ...)
 
 	local body = function()
 		return f(unpack(args, 1, argsLength))
 	end
 
-	local resultLength, result = pack(xpcall(body, debug.traceback))
+	local success, result = xpcall(body, debug.traceback)
 
 	-- If promise debugging is on, warn whenever a pcall fails.
 	-- This is useful for debugging issues within the Promise implementation
 	-- itself.
-	if PROMISE_DEBUG and not result[1] then
+	if PROMISE_DEBUG and not success then
 		warn(result[2])
 	end
 
-	return resultLength, result
+	return success, result
 end
 
 --[[
@@ -46,20 +35,19 @@ end
 	resolution mechanisms.
 ]]
 local function createAdvancer(callback, resolve, reject)
-	return function(...)
-		local resultLength, result = wpcallPacked(callback, ...)
-		local ok = result[1]
+	return function(argument)
+		local success, result = pcallWithTraceback(callback, argument)
 
-		if ok then
-			resolve(unpack(result, 2, resultLength))
+		if success then
+			resolve(result)
 		else
-			reject(unpack(result, 2, resultLength))
+			reject(result)
 		end
 	end
 end
 
-local function isEmpty(t)
-	return next(t) == nil
+local function isListEmpty(t)
+	return t[1] == nil
 end
 
 local function createSymbol(name)
@@ -120,13 +108,8 @@ function Promise.new(callback)
 
 		_status = Promise.Status.Started,
 
-		-- A table containing a list of all results, whether success or failure.
-		-- Only valid if _status is set to something besides Started
-		_values = nil,
-
-		-- Lua doesn't like sparse arrays very much, so we explicitly store the
-		-- length of _values to handle middle nils.
-		_valuesLength = -1,
+		-- The value held by the promise, only valid is _status is not Started
+		_value = nil,
 
 		-- If an error occurs with no observers, this will be set.
 		_unhandledRejection = false,
@@ -138,20 +121,18 @@ function Promise.new(callback)
 
 	setmetatable(self, Promise)
 
-	local function resolve(...)
-		self:_resolve(...)
+	local function resolve(value)
+		self:_resolve(value)
 	end
 
-	local function reject(...)
-		self:_reject(...)
+	local function reject(value)
+		self:_reject(value)
 	end
 
-	local _, result = wpcallPacked(callback, resolve, reject)
-	local ok = result[1]
-	local err = result[2]
+	local success, result = pcallWithTraceback(callback, resolve, reject)
 
-	if not ok and self._status == Promise.Status.Started then
-		reject(err)
+	if not success then
+		reject(result)
 	end
 
 	return self
@@ -186,15 +167,15 @@ function Promise.all(promises)
 	end
 
 	-- If there are no values then return an already resolved promise.
-	if #promises == 0 then
+	if isListEmpty(promises) then
 		return Promise.resolve({})
 	end
 
 	-- We need to check that each value is a promise here so that we can produce
 	-- a proper error rather than a rejected promise with our error.
-	for i = 1, #promises do
-		if not Promise.is(promises[i]) then
-			error(("Non-promise value passed into Promise.all at index #%d"):format(i), 2)
+	for index, promise in ipairs(promises) do
+		if not Promise.is(promise) then
+			error(("Non-promise value passed into Promise.all at index #%d"):format(index), 2)
 		end
 	end
 
@@ -207,8 +188,8 @@ function Promise.all(promises)
 		local resolvedCount = 0
 
 		-- Called when a single value is resolved and resolves if all are done.
-		local function resolveOne(i, ...)
-			resolvedValues[i] = ...
+		local function resolveOne(index, value)
+			resolvedValues[index] = value
 			resolvedCount = resolvedCount + 1
 
 			if resolvedCount == #promises then
@@ -218,14 +199,12 @@ function Promise.all(promises)
 
 		-- We can assume the values inside `promises` are all promises since we
 		-- checked above.
-		for i = 1, #promises do
-			promises[i]:andThen(
-				function(...)
-					resolveOne(i, ...)
+		for index, promise in ipairs(promises) do
+			promise:andThen(
+				function(value)
+					resolveOne(index, value)
 				end,
-				function(...)
-					reject(...)
-				end
+				reject
 			)
 		end
 	end)
@@ -275,10 +254,10 @@ function Promise.prototype:andThen(successHandler, failureHandler)
 			table.insert(self._queuedReject, failureCallback)
 		elseif self._status == Promise.Status.Resolved then
 			-- This promise has already resolved! Trigger success immediately.
-			successCallback(unpack(self._values, 1, self._valuesLength))
+			successCallback(self._value)
 		elseif self._status == Promise.Status.Rejected then
 			-- This promise died a terrible death! Trigger failure immediately.
-			failureCallback(unpack(self._values, 1, self._valuesLength))
+			failureCallback(self._value)
 		end
 	end)
 end
@@ -300,28 +279,25 @@ function Promise.prototype:await()
 
 	if self._status == Promise.Status.Started then
 		local result
-		local resultLength
 		local bindable = Instance.new("BindableEvent")
 
 		self:andThen(
-			function(...)
-				resultLength, result = pack(...)
-				bindable:Fire(true)
+			function(value)
+				result = value
 			end,
-			function(...)
-				resultLength, result = pack(...)
-				bindable:Fire(false)
+			function(value)
+				result = value
 			end
 		)
 
-		local ok = bindable.Event:Wait()
+		local success = bindable.Event:Wait()
 		bindable:Destroy()
 
-		return ok, unpack(result, 1, resultLength)
+		return success, result
 	elseif self._status == Promise.Status.Resolved then
-		return true, unpack(self._values, 1, self._valuesLength)
+		return true, self._value
 	elseif self._status == Promise.Status.Rejected then
-		return false, unpack(self._values, 1, self._valuesLength)
+		return false, self._value
 	end
 end
 
@@ -339,28 +315,17 @@ function Promise.prototype:_unwrap()
 
 	local success = self._status == Promise.Status.Resolved
 
-	return success, unpack(self._values, 1, self._valuesLength)
+	return success, self._value
 end
 
-function Promise.prototype:_resolve(...)
+function Promise.prototype:_resolve(value)
 	if self._status ~= Promise.Status.Started then
 		return
 	end
 
 	-- If the resolved value was a Promise, we chain onto it!
-	if Promise.is((...)) then
-		-- Without this warning, arguments sometimes mysteriously disappear
-		if select("#", ...) > 1 then
-			local message = (
-				"When returning a Promise from andThen, extra arguments are " ..
-				"discarded! See:\n\n%s"
-			):format(
-				self._source
-			)
-			warn(message)
-		end
-
-		(...):andThen(
+	if Promise.is(value) then
+		value:andThen(
 			function(...)
 				self:_resolve(...)
 			end,
@@ -368,32 +333,30 @@ function Promise.prototype:_resolve(...)
 				self:_reject(...)
 			end
 		)
+	else
+		self._status = Promise.Status.Resolved
+		self._value = value
 
-		return
-	end
-
-	self._status = Promise.Status.Resolved
-	self._valuesLength, self._values = pack(...)
-
-	-- We assume that these callbacks will not throw errors.
-	for _, callback in ipairs(self._queuedResolve) do
-		callback(...)
+		-- We assume that these callbacks will not throw errors.
+		for _, callback in ipairs(self._queuedResolve) do
+			callback(value)
+		end
 	end
 end
 
-function Promise.prototype:_reject(...)
+function Promise.prototype:_reject(value)
 	if self._status ~= Promise.Status.Started then
 		return
 	end
 
 	self._status = Promise.Status.Rejected
-	self._valuesLength, self._values = pack(...)
+	self._value = value
 
 	-- If there are any rejection handlers, call those!
-	if not isEmpty(self._queuedReject) then
+	if not isListEmpty(self._queuedReject) then
 		-- We assume that these callbacks will not throw errors.
 		for _, callback in ipairs(self._queuedReject) do
-			callback(...)
+			callback(value)
 		end
 	else
 		-- At this point, no one was able to observe the error.
@@ -402,7 +365,7 @@ function Promise.prototype:_reject(...)
 		-- observers, then we should put a message in the console.
 
 		self._unhandledRejection = true
-		local err = tostring((...))
+		local err = tostring(value)
 
 		spawn(function()
 			-- Someone observed the error, hooray!
