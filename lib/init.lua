@@ -284,9 +284,11 @@ function Promise.prototype:await()
 		self:andThen(
 			function(value)
 				result = value
+				bindable:Fire(true)
 			end,
 			function(value)
 				result = value
+				bindable:Fire(false)
 			end
 		)
 
