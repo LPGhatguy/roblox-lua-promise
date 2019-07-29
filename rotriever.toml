@@ -1,0 +1,6 @@
+[package]
+name = "roblox-lua-promise"
+version = "0.0.0"
+author = "LPGhatguy"
+
+[dependencies]
