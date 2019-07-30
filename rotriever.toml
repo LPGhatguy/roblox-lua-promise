@@ -2,5 +2,6 @@
 name = "roblox-lua-promise"
 version = "0.0.0"
 author = "LPGhatguy"
+content_root = "lib"
 
 [dependencies]
