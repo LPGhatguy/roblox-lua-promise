@@ -1,6 +1,8 @@
 # Roblox Lua Promise
 An implementation of `Promise` similar to Promise/A+.
 
+### This project is no longer maintained. I recommend [evaera's Promise implementation](https://github.com/evaera/roblox-lua-promise), which is a fork that implements cancellation and is actively maintained!
+
 ## Motivation
 I've found that being able to yield anywhere causes lots of bugs. In [Rodux](https://github.com/Roblox/Rodux), I explicitly made it impossible to yield in a change handler because of the sheer number of bugs that occured when callbacks randomly yielded.
 
